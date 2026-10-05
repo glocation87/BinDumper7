@@ -19,12 +19,16 @@
 
 #ifdef _KERNEL_MODE
     typedef struct _MMVAD_SHORT {
-        RTL_BALANCED_NODE   VadNode;        // offset 0x00
+        RTL_BALANCED_NODE   VadNode;        // offset 0x00       
         ULONG               StartingVpn;    // offset 0x18
         ULONG               EndingVpn;      // offset 0x1C
-        ULONG               StartingVpnHigh;// offset 0x20  (upper 8 bits)
-        ULONG               EndingVpnHigh;  // offset 0x24
+        UCHAR               StartingVpnHigh;// offset 0x20 
+        UCHAR               EndingVpnHigh;  // offset 0x21
     } MMVAD_SHORT, * PMMVAD_SHORT;
+
+    typedef struct _RTL_AVL_TREE {
+        PRTL_BALANCED_NODE Root;   // direct pointer to root node, NULL if empty
+    } RTL_AVL_TREE, * PRTL_AVL_TREE;
 
     typedef struct _VAD_REGION {
         ULONG64 StartVa;

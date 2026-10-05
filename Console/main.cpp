@@ -101,7 +101,7 @@ int main()
 			INIT_MIRROR_SEC_BUFFER section_buffer{};
 			section_buffer.ProcessId = pid;
 			section_buffer.Flag = 0x0; // 0x0 = uninitialized, 0x1 = initialized
-			status = DeviceIoControl(h_device, IOCTL_INIT_MIRROR_SEC, &section_buffer, sizeof(INIT_MIRROR_SEC_BUFFER), 
+			status = DeviceIoControl(h_device, IOCTL_INIT_MIRROR_SEC, &section_buffer, sizeof(INIT_MIRROR_SEC_BUFFER),
 				&section_buffer, sizeof(INIT_MIRROR_SEC_BUFFER), &bytes_returned, NULL);
 
 			if (status) {
@@ -118,10 +118,3 @@ int main()
 		return 0;
 	}
 }
-
-/*
-	Goals:
-	1. specify a module within process space to be targeted and dumped
-	2. walk the peb structure to map out the program.
-	3. driver has to read the process memory and stream it to usermode
-*/
