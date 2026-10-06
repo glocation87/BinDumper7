@@ -14,12 +14,18 @@
 #define GET_BASE_ADDRESS_CODE 0x800
 #define GET_IMAGE_MIRROR_CODE 0x801
 #define GET_IMAGE_SECTION_CODE 0x802
+#define GET_SECTION_HANDLE_CODE 0x802
 
+#define IOCTL_GET_SECTION_HANDLE CTL_CODE(SE7EN_DEVICE_TYPE, GET_SECTION_HANDLE_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_GET_BASE_ADDRESS CTL_CODE(SE7EN_DEVICE_TYPE, GET_BASE_ADDRESS_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_INIT_MIRROR_SEC CTL_CODE(SE7EN_DEVICE_TYPE, GET_IMAGE_MIRROR_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_GET_MIRROR_SEC CTL_CODE(SE7EN_DEVICE_TYPE, GET_IMAGE_SECTION_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #ifdef _KERNEL_MODE
+
+#define KPROCESS_DTB_OFFSET   0x028
+#define KPROCESS_UDIRBASE_OFFSET 0x158
+
 #define WORD USHORT
 #define PML4_INDEX(va) (((va) >> 39) & 0x1FF)  // 0x1FF = 511 in decimal 111111111.
 #define PDPT_INDEX(va) (((va) >> 30) & 0x1FF)
@@ -111,57 +117,6 @@
 
     } SEVEN_CONTEXT, * PSEVEN_CONTEXT;
 
-    typedef struct _KPROCESS
-    {
-        DISPATCHER_HEADER Header;
-        LIST_ENTRY ProfileListHead;
-        ULONG DirectoryTableBase;
-        ULONG Unused0;
-        KGDTENTRY LdtDescriptor;
-        KIDTENTRY Int21Descriptor;
-        WORD IopmOffset;
-        UCHAR Iopl;
-        UCHAR Unused;
-        ULONG ActiveProcessors;
-        ULONG KernelTime;
-        ULONG UserTime;
-        LIST_ENTRY ReadyListHead;
-        SINGLE_LIST_ENTRY SwapListEntry;
-        PVOID VdmTrapcHandler;
-        LIST_ENTRY ThreadListHead;
-        ULONG ProcessLock;
-        ULONG Affinity;
-#pragma warning(push)
-#pragma warning(disable: 4201)  // nameless struct/union
-        union UnioneOne
-        {
-            ULONG AutoAlignment : 1;
-            ULONG DisableBoost : 1;
-            ULONG DisableQuantum : 1;
-            ULONG ReservedFlags : 29;
-            LONG ProcessFlags;
-        };
-#pragma warning(pop)
-        CHAR BasePriority;
-        CHAR QuantumReset;
-        UCHAR State;
-        UCHAR ThreadSeed;
-        UCHAR PowerState;
-        UCHAR IdealNode;
-        UCHAR Visited;
-#pragma warning(push)
-#pragma warning(disable: 4201)  // nameless struct/union
-        union UnionTwo
-        {
-            KEXECUTE_OPTIONS Flags;
-            UCHAR ExecuteOptions;
-        };
-#pragma warning(pop)
-        ULONG StackCount;
-        LIST_ENTRY ProcessListEntry;
-        UINT64 CycleTime;
-    } KPROCESS, * PKPROCESS;
-
 #endif
 
 typedef struct _SEC_VIEW {
@@ -192,3 +147,9 @@ typedef struct _PROCESS_BASE_ADDRESS {
     PVOID BaseAddress;
 #endif
 } PROCESS_BASE_ADDRESS, * PPROCESS_BASE_ADDRESS;
+typedef struct _SECTION_VIEW_INFO {
+    PVOID   MirrorBase;
+    SIZE_T  MirrorSize;
+    PVOID   ProcessBase;
+    ULONG   RegionCount;
+} SECTION_VIEW_INFO, * PSECTION_VIEW_INFO;

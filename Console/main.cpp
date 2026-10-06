@@ -110,6 +110,19 @@ int main()
 			else {
 				std::cout << "failed to initialize mirror section: " << GetLastError() << std::endl;
 			}
+			
+
+			SECTION_VIEW_INFO section_view{};
+			status = DeviceIoControl(h_device, IOCTL_GET_SECTION_HANDLE, &section_view, sizeof(SECTION_VIEW_INFO),
+				&section_view, sizeof(SECTION_VIEW_INFO), &bytes_returned, NULL);
+
+			if (status) {
+				std::cout << "mirror section view handle recieved\n";
+			}
+			else {
+				std::cout << "failed to initialize mirror section: " << GetLastError() << std::endl;
+			}
+
 			break;
 		}
 
