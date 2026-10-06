@@ -18,6 +18,98 @@ NTSTATUS Sign(PIRP irp, NTSTATUS status, ULONG_PTR info) {
 	return status;
 }
 
+//stole these routines here: https://github.com/0xMastEB/manual-pte-walk/blob/main/main.c
+ULONG64 ReadPhysical(ULONG64 PhysAddr)
+{
+	ULONG64 value = 0;
+	MM_COPY_ADDRESS addr;
+	SIZE_T bytesRead = 0;
+	addr.PhysicalAddress.QuadPart = PhysAddr;
+	MmCopyMemory(&value, addr, sizeof(ULONG64), MM_COPY_MEMORY_PHYSICAL, &bytesRead);
+	return value;
+}
+
+ULONG64 WalkPageTables(ULONG64 cr3, ULONG64 VirtualAddress)
+{
+	ULONG64 pml4Phys = cr3 & 0xFFFFFFFFF000;
+
+	ULONG64 pml4e = ReadPhysical(pml4Phys + PML4_INDEX(VirtualAddress) * 8);
+	DbgPrint("[Walk] PML4E: 0x%llX (index %llu)\n", pml4e, PML4_INDEX(VirtualAddress));
+	if (!(pml4e & 1)) { DbgPrint("[Walk] PML4E Not Present!\n"); return 0; }
+
+	ULONG64 pdpte = ReadPhysical((pml4e & 0xFFFFFFFFF000) + PDPT_INDEX(VirtualAddress) * 8);
+	DbgPrint("[Walk] PDPTE: 0x%llX (index %llu)\n", pdpte, PDPT_INDEX(VirtualAddress));
+	if (!(pdpte & 1)) { DbgPrint("[Walk] PDPTE not present!\n"); return 0; }
+
+	ULONG64 pde = ReadPhysical((pdpte & 0xFFFFFFFFF000) + PD_INDEX(VirtualAddress) * 8);
+	DbgPrint("[Walk] PDE: 0x%llX (index %llu)\n", pde, PD_INDEX(VirtualAddress));
+	if (!(pde & 1)) { DbgPrint("[Walk] PDE not present!\n"); return 0; }
+
+	if (pde & 0x80) {
+		ULONG64 physAddr = (pde & 0xFFFFFE00000) | ((ULONG64)VirtualAddress & 0x1FFFFF);
+		DbgPrint("[Walk] 2MB Large Page! Physical: 0x%llX\n", physAddr);
+		return 0;
+	}
+
+	ULONG64 pte = ReadPhysical((pde & 0xFFFFFFFFF000) + PT_INDEX(VirtualAddress) * 8);
+	DbgPrint("[Walk] PTE: 0x%llX (index %llu)\n", pte, PT_INDEX(VirtualAddress));
+	if (!(pte & 1)) { DbgPrint("[Walk] PTE not present!\n"); return 0; }
+
+	ULONG64 physAddr = (pte & 0xFFFFFFFFF000) | ((ULONG64)VirtualAddress & 0xFFF);
+	DbgPrint("[Walk] Physical Address: 0x%llX\n", physAddr);
+
+	return physAddr;
+}
+
+NTSTATUS PopulateSectionMirror(PSEVEN_CONTEXT ctx)
+{
+	PEPROCESS target_process = ctx->TargetProcess;
+	KPROCESS* kprocess = (KPROCESS*)(target_process);
+	ULONG64 cr3 = kprocess->DirectoryTableBase;
+	
+	DbgPrint("EPROCESS: 0x%llX\n", (ULONG64)target_process);
+	DbgPrint("CR3 from DTB: 0x%llX\n", cr3);
+	DbgPrint("UserDTB: 0x%llX\n", *(ULONG64*)((PUCHAR)target_process + 0x28 + 8));
+
+	
+	//iterate cached regions and populate the section mirror with their contents
+	for (ULONG region_idx = 0; region_idx < ctx->RegionCount; region_idx++ ) {
+		
+		VAD_REGION* region = &ctx->Regions[region_idx];
+		//iterate every va within region
+		for (ULONG64 va = region->StartVa; va < region->StartVa + region->Size; va += PAGE_SIZE) {
+
+			// Walk PT for this VA, get physical address
+			// Copy physical page into section at region->Offset + (va - region->StartVa)
+			ULONG64 phys_mem = WalkPageTables(cr3, va);
+			ULONG64 section_offset = region->Offset + (va - region->StartVa);
+			PVOID   dest = (PUCHAR)ctx->SectionBase + section_offset;
+
+			LARGE_INTEGER low_sec_off;
+			low_sec_off.QuadPart = section_offset;
+
+			PVOID page_view = NULL;
+			SIZE_T page_size = PAGE_SIZE;
+			DbgBreakPoint();
+			ZwMapViewOfSection(ctx->SectionHandle, ZwCurrentProcess(),
+				&page_view, 0, PAGE_SIZE, &low_sec_off,
+				&page_size, ViewUnmap, 0, PAGE_READWRITE);
+
+
+			MM_COPY_ADDRESS src;
+			src.PhysicalAddress.QuadPart = phys_mem;
+			SIZE_T bytes_copied;
+			MmCopyMemory(dest, src, PAGE_SIZE, MM_COPY_MEMORY_PHYSICAL, &bytes_copied);
+
+
+			ZwUnmapViewOfSection(ZwCurrentProcess(), page_view);
+			DbgPrint("[PopulateSectionMirror] Copied 0x%llX bytes from physical 0x%llX to section offset 0x%llX\n", bytes_copied, phys_mem, section_offset);
+		}
+	}
+	
+	return STATUS_SUCCESS;
+}
+
 NTSTATUS CreateSectionMirror(PSEVEN_CONTEXT ctx, SIZE_T size) {
 	LARGE_INTEGER max_size;
 	max_size.QuadPart = (LONGLONG)size;
@@ -37,9 +129,20 @@ NTSTATUS CreateSectionMirror(PSEVEN_CONTEXT ctx, SIZE_T size) {
 		return status;
 	}
 
+	DbgPrint("[CreateSectionMirror] Section created successfully\n");
+	DbgBreakPoint();
+	SIZE_T view_size = size;
 	ctx->SectionHandle = section_handle;
-	ctx->SectionSize = size;
-	ctx->SectionBase = NULL; // mapped later during PT walk
+	ctx->SectionSize = view_size;
+
+	if (!NT_SUCCESS(PopulateSectionMirror(ctx))) {
+		DbgPrint("[CreateSectionMirror] Failed to populate section mirror\n");
+		ZwClose(section_handle);
+		ctx->SectionHandle = NULL;
+		ctx->SectionSize = 0;
+		ctx->SectionBase = NULL;
+		return STATUS_UNSUCCESSFUL;
+	}
 	return STATUS_SUCCESS;
 }
 
@@ -65,6 +168,7 @@ NTSTATUS IoDeviceDispatch(PDEVICE_OBJECT device_object, PIRP irp) {
 			}
 			ctx->Offsets = g_Offsets[3]; // 26h1
 			ctx->TargetPid = process_base_address->ProcessId;
+			ctx->TargetProcess = target_process;
 
 			ObDereferenceObject(target_process);
 			out = sizeof(PROCESS_BASE_ADDRESS);
@@ -92,6 +196,11 @@ NTSTATUS IoDeviceDispatch(PDEVICE_OBJECT device_object, PIRP irp) {
 				ObDereferenceObject(target_process);
 				return Sign(irp, STATUS_UNSUCCESSFUL, 0);
 			}
+
+			ctx->Regions = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+				sizeof(VAD_REGION) * 1024, 'gdAV');
+			ctx->RegionCount = 0;
+
 			PRTL_BALANCED_NODE nodes[1024] = { 0 };
 			INT stack_ptr = 0;
 			ULONG64 lowest_va = MAXULONG64;
@@ -99,6 +208,8 @@ NTSTATUS IoDeviceDispatch(PDEVICE_OBJECT device_object, PIRP irp) {
 			nodes[stack_ptr++] = vad->Root; //stack_ptr++ is the same as links[0 && ++stack_ptr] if it could hold expressions
 			INT node_count = 0;
 			ULONG64 bytes = 0;
+			ULONG64 current_offset = 0;
+
 
 			while (stack_ptr > 0) {
 				//--stack_ptr is the same as links[stack-ptr - 1 = 0] because stack_ptr++ increments the value at stack_ptr memory address by unit amount
@@ -127,8 +238,14 @@ NTSTATUS IoDeviceDispatch(PDEVICE_OBJECT device_object, PIRP irp) {
 				if (start_va < lowest_va)  lowest_va = start_va;
 				if (end_va > highest_va) highest_va = end_va;
 
-				node_count++;
+				ctx->Regions[node_count].StartVa = start_va;
+				ctx->Regions[node_count].Size = region_size;
+				ctx->Regions[node_count].Offset = current_offset;
+				ctx->RegionCount++;
+
+				current_offset += region_size;
 				bytes += region_size;
+				node_count++;
 
 				PRTL_BALANCED_NODE left_child = (PRTL_BALANCED_NODE)((ULONG_PTR)current_link->Left & ~3ULL);
 				PRTL_BALANCED_NODE right_child = (PRTL_BALANCED_NODE)((ULONG_PTR)current_link->Right & ~3ULL);
@@ -149,7 +266,7 @@ NTSTATUS IoDeviceDispatch(PDEVICE_OBJECT device_object, PIRP irp) {
 			}
 
 			ctx->ProcessBase = lowest_va;
-		 ctx->ProcessTop = highest_va;
+			ctx->ProcessTop = highest_va;
 			ctx->Initialized = TRUE;
 
 			section_buffer->Flag = 0x1; // initialized

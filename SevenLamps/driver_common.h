@@ -13,11 +13,19 @@
 #define SE7EN_DEVICE_TYPE 0x8239
 #define GET_BASE_ADDRESS_CODE 0x800
 #define GET_IMAGE_MIRROR_CODE 0x801
+#define GET_IMAGE_SECTION_CODE 0x802
 
 #define IOCTL_GET_BASE_ADDRESS CTL_CODE(SE7EN_DEVICE_TYPE, GET_BASE_ADDRESS_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_INIT_MIRROR_SEC CTL_CODE(SE7EN_DEVICE_TYPE, GET_IMAGE_MIRROR_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_MIRROR_SEC CTL_CODE(SE7EN_DEVICE_TYPE, GET_IMAGE_SECTION_CODE, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #ifdef _KERNEL_MODE
+#define WORD USHORT
+#define PML4_INDEX(va) (((va) >> 39) & 0x1FF)  // 0x1FF = 511 in decimal 111111111.
+#define PDPT_INDEX(va) (((va) >> 30) & 0x1FF)
+#define PD_INDEX(va)   (((va) >> 21) & 0x1FF)
+#define PT_INDEX(va)   (((va) >> 12) & 0X1FF) 
+
     typedef struct _MMVAD_SHORT {
         RTL_BALANCED_NODE   VadNode;        // offset 0x00       
         ULONG               StartingVpn;    // offset 0x18
@@ -33,6 +41,7 @@
     typedef struct _VAD_REGION {
         ULONG64 StartVa;
         SIZE_T  Size;
+        ULONG64 Offset;
     } VAD_REGION, * PVAD_REGION;
 
     typedef struct _VAD_CONTEXT {
@@ -51,7 +60,29 @@
         ULONG EndingVpnHighOffset;
         ULONG VadFlagsOffset;
     } OFFSET_TABLE;
-
+    typedef struct _KGDTENTRY
+    {
+        WORD LimitLow;
+        WORD BaseLow;
+        ULONG HighWord;
+    } KGDTENTRY, * PKGDTENTRY;
+    typedef struct _KIDTENTRY
+    {
+        WORD Offset;
+        WORD Selector;
+        WORD Access;
+        WORD ExtendedOffset;
+    } KIDTENTRY, * PKIDTENTRY;
+    typedef struct _KEXECUTE_OPTIONS
+    {
+        ULONG ExecuteDisable : 1;
+        ULONG ExecuteEnable : 1;
+        ULONG DisableThunkEmulation : 1;
+        ULONG Permanent : 1;
+        ULONG ExecuteDispatchEnable : 1;
+        ULONG ImageDispatchEnable : 1;
+        ULONG Spare : 2;
+    } KEXECUTE_OPTIONS, * PKEXECUTE_OPTIONS;
 
     typedef struct _SEVEN_CONTEXT {
         // Target info
@@ -79,8 +110,69 @@
         PDEVICE_OBJECT  DeviceObject;
 
     } SEVEN_CONTEXT, * PSEVEN_CONTEXT;
+
+    typedef struct _KPROCESS
+    {
+        DISPATCHER_HEADER Header;
+        LIST_ENTRY ProfileListHead;
+        ULONG DirectoryTableBase;
+        ULONG Unused0;
+        KGDTENTRY LdtDescriptor;
+        KIDTENTRY Int21Descriptor;
+        WORD IopmOffset;
+        UCHAR Iopl;
+        UCHAR Unused;
+        ULONG ActiveProcessors;
+        ULONG KernelTime;
+        ULONG UserTime;
+        LIST_ENTRY ReadyListHead;
+        SINGLE_LIST_ENTRY SwapListEntry;
+        PVOID VdmTrapcHandler;
+        LIST_ENTRY ThreadListHead;
+        ULONG ProcessLock;
+        ULONG Affinity;
+#pragma warning(push)
+#pragma warning(disable: 4201)  // nameless struct/union
+        union UnioneOne
+        {
+            ULONG AutoAlignment : 1;
+            ULONG DisableBoost : 1;
+            ULONG DisableQuantum : 1;
+            ULONG ReservedFlags : 29;
+            LONG ProcessFlags;
+        };
+#pragma warning(pop)
+        CHAR BasePriority;
+        CHAR QuantumReset;
+        UCHAR State;
+        UCHAR ThreadSeed;
+        UCHAR PowerState;
+        UCHAR IdealNode;
+        UCHAR Visited;
+#pragma warning(push)
+#pragma warning(disable: 4201)  // nameless struct/union
+        union UnionTwo
+        {
+            KEXECUTE_OPTIONS Flags;
+            UCHAR ExecuteOptions;
+        };
+#pragma warning(pop)
+        ULONG StackCount;
+        LIST_ENTRY ProcessListEntry;
+        UINT64 CycleTime;
+    } KPROCESS, * PKPROCESS;
+
 #endif
 
+typedef struct _SEC_VIEW {
+    #ifdef _KERNEL_MODE
+    PVOID ViewBase;
+	SIZE_T ViewSize;
+    #else
+    PVOID ViewBase;
+    SIZE_T ViewSize;
+    #endif
+} SEC_VIEW, * PSEC_VIEW;
 typedef struct _INIT_MIRROR_SEC_BUFFER {
 #ifdef _KERNEL_MODE
     ULONG ProcessId;
